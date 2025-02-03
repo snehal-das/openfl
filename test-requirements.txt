@@ -8,3 +8,6 @@ defusedxml==0.7.1
 matplotlib==3.10.0
 fpdf==1.7.2
 papermill==2.6.0
+memory_profiler
+pympler
+guppy3

@@ -7,6 +7,11 @@
 from threading import Lock
 from types import MethodType
 from typing import Dict, Iterator, Optional
+import logging
+import gc
+from memory_profiler import profile
+import tracemalloc
+import time
 
 import numpy as np
 import pandas as pd
@@ -15,6 +20,8 @@ from openfl.databases.utilities import ROUND_PLACEHOLDER, _retrieve, _search, _s
 from openfl.interface.aggregation_functions import AggregationFunction
 from openfl.utilities import LocalTensor, TensorKey, change_tags
 
+logger = logging.getLogger(__name__)
+tracemalloc.start()
 
 class TensorDB:
     """The TensorDB stores a tensor key and the data that it corresponds to.
@@ -29,7 +36,7 @@ class TensorDB:
         mutex: A threading Lock object used to ensure thread-safe operations
             on the tensor_db Dataframe.
     """
-
+    @profile
     def __init__(self) -> None:
         """Initializes a new instance of the TensorDB class."""
         types_dict = {
@@ -47,6 +54,7 @@ class TensorDB:
 
         self.mutex = Lock()
 
+    @profile
     def _bind_convenience_methods(self):
         """Bind convenience methods for the TensorDB dataframe to make storage,
         retrieval, and search easier."""
@@ -57,6 +65,7 @@ class TensorDB:
         if not hasattr(self.tensor_db, "search"):
             self.tensor_db.search = MethodType(_search, self.tensor_db)
 
+    @profile
     def __repr__(self) -> str:
         """Returns the string representation of the TensorDB object.
 
@@ -67,6 +76,7 @@ class TensorDB:
             content = self.tensor_db[["tensor_name", "origin", "round", "report", "tags"]]
             return f"TensorDB contents:\n{content}"
 
+    @profile
     def __str__(self) -> str:
         """Returns the string representation of the TensorDB object.
 
@@ -75,6 +85,7 @@ class TensorDB:
         """
         return self.__repr__()
 
+    @profile
     def clean_up(self, remove_older_than: int = 1) -> None:
         """Removes old entries from the database to prevent it from becoming
         too large and slow.
@@ -83,18 +94,33 @@ class TensorDB:
             remove_older_than (int, optional): Entries older than this number
                 of rounds are removed. Defaults to 1.
         """
+        start_time = time.time()
+
         if remove_older_than < 0:
             # Getting a negative argument calls off cleaning
             return
         current_round = self.tensor_db["round"].astype(int).max()
         if current_round == ROUND_PLACEHOLDER:
             current_round = np.sort(self.tensor_db["round"].astype(int).unique())[-2]
+        # Keep only recent records
+        old_tensor_db = self.tensor_db
         self.tensor_db = self.tensor_db[
             (self.tensor_db["round"].astype(int) > current_round - remove_older_than)
             | self.tensor_db["report"]
-        ].reset_index(drop=True)
+        ].copy()  # Avoid unnecessary memory retention
 
+        self.tensor_db.reset_index(drop=True, inplace=True)
+
+        # Delete old DataFrame and force garbage collection
+        del old_tensor_db
+        gc.collect()
+
+        logger.info(f"TensorDB::clean_up took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("TensorDB::clean_up")
+
+    @profile
     def cache_tensor(self, tensor_key_dict: Dict[TensorKey, np.ndarray]) -> None:
+        start_time = time.time()
         """Insert a tensor into TensorDB (dataframe).
 
         Args:
@@ -106,26 +132,33 @@ class TensorDB:
         """
         entries_to_add = []
         with self.mutex:
+            old_tensor_db = self.tensor_db
             for tensor_key, nparray in tensor_key_dict.items():
                 tensor_name, origin, fl_round, report, tags = tensor_key
-                entries_to_add.append(
-                    pd.DataFrame(
+                new_entry = pd.DataFrame(
+                    [
                         [
-                            [
-                                tensor_name,
-                                origin,
-                                fl_round,
-                                report,
-                                tags,
-                                nparray,
-                            ]
-                        ],
-                        columns=list(self.tensor_db.columns),
-                    )
+                            tensor_name,
+                            origin,
+                            fl_round,
+                            report,
+                            tags,
+                            nparray,
+                        ]
+                    ],
+                    columns=list(self.tensor_db.columns),
                 )
+                entries_to_add.append(new_entry)
 
-            self.tensor_db = pd.concat([self.tensor_db, *entries_to_add], ignore_index=True)
+            self.tensor_db = pd.concat([self.tensor_db, *entries_to_add], ignore_index=True, copy=True)
 
+            del old_tensor_db
+            entries_to_add.clear()
+            gc.collect()
+        logger.info(f"TensorDB::clean_up took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("TensorDB::cache_tensor")
+
+    @profile
     def get_tensor_from_cache(self, tensor_key: TensorKey) -> Optional[np.ndarray]:
         """Perform a lookup of the tensor_key in the TensorDB.
 
@@ -136,6 +169,7 @@ class TensorDB:
             Optional[np.ndarray]: The numpy array if it is available.
                 Otherwise, returns None.
         """
+        start_time = time.time()
         tensor_name, origin, fl_round, report, tags = tensor_key
 
         # TODO come up with easy way to ignore compression
@@ -149,8 +183,13 @@ class TensorDB:
 
         if len(df) == 0:
             return None
-        return np.array(df["nparray"].iloc[0])
 
+        logger.info(f"TensorDB::get_tensor_for_cache() took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("TensorDB::get_tensor_from_cache")
+
+         return np.array(df["nparray"].iloc[0])
+
+    @profile
     def get_tensors_by_round_and_tags(self, fl_round: int, tags: tuple) -> dict:
         """Retrieve all tensors that match the specified round and tags.
 
@@ -212,6 +251,7 @@ class TensorDB:
                 returns None.
             None: if not all values are present.
         """
+        start_time = time.time()
         if len(collaborator_weight_dict) != 0:
             assert np.abs(1.0 - sum(collaborator_weight_dict.values())) < 0.01, (
                 f"Collaborator weights do not sum to 1.0: {collaborator_weight_dict}"
@@ -277,8 +317,12 @@ class TensorDB:
         agg_nparray = aggregation_function(local_tensors, db_iterator, tensor_name, fl_round, tags)
         self.cache_tensor({tensor_key: agg_nparray})
 
+        logger.info(f"TensorDB::get_aggregated_tensor() took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("TensorDB::get_aggregated_tensor")
+
         return np.array(agg_nparray)
 
+    @profile
     def _iterate(self, order_by: str = "round", ascending: bool = False) -> Iterator[pd.Series]:
         """Returns an iterator over the rows of the TensorDB, sorted by a
         specified column.
@@ -296,3 +340,11 @@ class TensorDB:
         rows = self.tensor_db[columns].sort_values(by=order_by, ascending=ascending).iterrows()
         for _, row in rows:
             yield row
+
+    def _log_memory_usage(self, func_name: str = "") -> None:
+        """Log the current memory usage."""
+        current, peak = tracemalloc.get_traced_memory()
+        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        tracemalloc.reset_peak()
+        leaked_objects = gc.garbage
+        logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")

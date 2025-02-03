@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 from random import random
 from time import sleep
+import gc
 
 from grpc import (
     StatusCode,
@@ -21,8 +22,11 @@ from openfl.protocols import aggregator_pb2, aggregator_pb2_grpc, utils
 from openfl.transport.grpc.grpc_channel_options import channel_options
 from openfl.utilities import check_equal, check_is_in
 
+import time
+from memory_profiler import profile
 logger = logging.getLogger(__name__)
-
+import tracemalloc
+gc.enable()
 
 class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
     """GRPC server class for the Aggregator.
@@ -45,7 +49,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
         server (grpc.Server): The gRPC server.
         server_credentials (grpc.ServerCredentials): The server's credentials.
     """
-
+    @profile
     def __init__(
         self,
         aggregator,
@@ -91,6 +95,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
         self.logger = logging.getLogger(__name__)
         self.root_certificate_refresher_cb = root_certificate_refresher_cb
 
+    @profile
     def validate_collaborator(self, request, context):
         """Validate the collaborator.
 
@@ -106,6 +111,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             grpc.RpcError: If the collaborator or collaborator certificate is
                 not authorized.
         """
+        start_time = time.time()
         if self.use_tls:
             collaborator_common_name = request.header.sender
             if self.require_client_auth:
@@ -123,7 +129,11 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
                     f"Invalid collaborator. CN: |{common_name}| "
                     f"collaborator_common_name: |{collaborator_common_name}|",
                 )
+        
+        logger.info(f"validate_collaborator took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::validate_collaborator")
 
+    @profile
     def get_header(self, collaborator_name):
         """Compose and return MessageHeader.
 
@@ -144,6 +154,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             single_col_cert_common_name=self.aggregator.single_col_cert_common_name,
         )
 
+    @profile
     def check_request(self, request):
         """Validate request header matches expected values.
 
@@ -175,8 +186,9 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             request.header.single_col_cert_common_name,
             self.aggregator.single_col_cert_common_name,
             self.logger,
-        )
+        ) 
 
+    @profile
     def GetTasks(self, request, context):  # NOQA:N802
         """Request a job from aggregator.
 
@@ -190,6 +202,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
         Returns:
             aggregator_pb2.GetTasksResponse: The response to the request.
         """
+        start_time = time.time()
         self.validate_collaborator(request, context)
         self.check_request(request)
         collaborator_name = request.header.sender
@@ -225,7 +238,11 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             sleep_time=sleep_time,
             quit=time_to_quit,
         )
+    
+        logger.info(f"GetTasks took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::GetTasks")
 
+    @profile
     def GetAggregatedTensor(self, request, context):  # NOQA:N802
         """Request a job from aggregator.
 
@@ -241,6 +258,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             aggregator_pb2.GetAggregatedTensorResponse: The response to the
                 request.
         """
+        start_time = time.time()
         self.validate_collaborator(request, context)
         self.check_request(request)
         collaborator_name = request.header.sender
@@ -264,7 +282,10 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             round_number=round_number,
             tensor=named_tensor,
         )
+        logger.info(f"GetAggregatedTensor took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::GetAggregatedTensor")
 
+    @profile
     def SendLocalTaskResults(self, request, context):  # NOQA:N802
         """Request a model download from aggregator.
 
@@ -280,6 +301,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             aggregator_pb2.SendLocalTaskResultsResponse: The response to the
                 request.
         """
+        start_time = time.time()
         try:
             proto = aggregator_pb2.TaskResults()
             proto = utils.datastream_to_proto(proto, request)
@@ -304,7 +326,10 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
         return aggregator_pb2.SendLocalTaskResultsResponse(
             header=self.get_header(collaborator_name)
         )
+        logger.info(f"SendLocalTaskResults took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::SendLocalTaskResults")
 
+    @profile
     def get_server(self):
         """
         Return gRPC server.
@@ -355,6 +380,7 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
 
         return self.server
 
+    @profile
     def serve(self):
         """Start an aggregator gRPC service.
 
@@ -373,3 +399,12 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             pass
 
         self.server.stop(0)
+
+    def _log_memory_usage(self, func_name: str = "") -> None:
+        """Log the current memory usage."""
+        current, peak = tracemalloc.get_traced_memory()
+        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        tracemalloc.reset_peak()
+
+        leaked_objects = gc.garbage
+        logger.info("{func_name}: Uncollected objects : {leaked_objects}")

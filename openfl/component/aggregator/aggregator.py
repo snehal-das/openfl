@@ -6,8 +6,13 @@
 import logging
 import queue
 import time
+from memory_profiler import profile
+import sys
+from pympler import asizeof
+import gc
 from threading import Lock
 from typing import List, Optional
+import tracemalloc
 
 import openfl.callbacks as callbacks_module
 from openfl.component.aggregator.straggler_handling import CutoffTimePolicy, StragglerPolicy
@@ -20,6 +25,8 @@ from openfl.utilities import TaskResultKey, TensorKey, change_tags
 
 logger = logging.getLogger(__name__)
 
+gc.enable()
+tracemalloc.start()
 
 class Aggregator:
     """An Aggregator is the central node in federated learning.
@@ -62,7 +69,7 @@ class Aggregator:
     .. note::
         - plan setting
     """
-
+    @profile
     def __init__(
         self,
         aggregator_uuid,
@@ -294,7 +301,9 @@ class Aggregator:
             task_id += 1
         return recovered
 
+    @profile
     def _load_initial_tensors(self):
+        start_time = time.time()
         """Load all of the tensors required to begin federated learning.
 
         Required tensors are: \
@@ -321,8 +330,12 @@ class Aggregator:
         # all initial model tensors are loaded here
         self.tensor_db.cache_tensor(tensor_key_dict)
         logger.debug("This is the initial tensor_db: %s", self.tensor_db)
+        logger.info(f"_load_initial_tensors took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::_load_initial_tensors")
 
+    @profile
     def _load_initial_tensors_from_dict(self, tensor_dict):
+        start_time = time.time()
         """Load all of the tensors required to begin federated learning.
 
         Required tensors are: \
@@ -338,8 +351,12 @@ class Aggregator:
         # all initial model tensors are loaded here
         self.tensor_db.cache_tensor(tensor_key_dict)
         logger.debug("This is the initial tensor_db: %s", self.tensor_db)
+        logger.info(f"_load_initial_tensors_from_dict took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::_load_initial_tensors_from_dict")
 
+    @profile
     def _save_model(self, round_number, file_path):
+        start_time = time.time()
         """Save the best or latest model.
 
         Args:
@@ -391,9 +408,14 @@ class Aggregator:
         self.model = utils.construct_model_proto(
             tensor_dict, round_number, self.compression_pipeline
         )
+        del og_tensor_dict, tensor_keys, tensor_dict
         utils.dump_proto(self.model, file_path)
+        logger.info(f"_save_model took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::_save_model")
 
+    @profile
     def valid_collaborator_cn_and_id(self, cert_common_name, collaborator_common_name):
+        start_time = time.time()
         """
         Determine if the collaborator certificate and ID are valid for this federation.
 
@@ -421,17 +443,23 @@ class Aggregator:
                 cert_common_name == self.single_col_cert_common_name
                 and collaborator_common_name in self.authorized_cols
             )
+        logger.info(f"valid_collaborator_cn_and_id took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def all_quit_jobs_sent(self):
+        start_time = time.time()
         """Assert all quit jobs are sent to collaborators.
 
         Returns:
             bool: True if all quit jobs are sent, False otherwise.
         """
         return set(self.quit_job_sent_to) == set(self.authorized_cols)
+        logger.info(f"all_quit_jobs_sent took {time.time() - start_time:.2f} seconds")
 
+    @profile
     @staticmethod
     def _get_sleep_time():
+        start_time = time.time()
         """Sleep 10 seconds.
 
         Returns:
@@ -439,16 +467,22 @@ class Aggregator:
         """
         # Decrease sleep period for finer discretezation
         return 10
+        logger.info(f"_get_sleep_time took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def _time_to_quit(self):
+        start_time = time.time()
         """If all rounds are complete, it's time to quit.
 
         Returns:
             bool: True if it's time to quit, False otherwise.
         """
         return self.round_number >= self.rounds_to_train
+        logger.info(f"_time_to_quit took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def get_tasks(self, collaborator_name):
+        start_time = time.time()
         """RPC called by a collaborator to determine which tasks to perform.
 
         Args:
@@ -529,9 +563,12 @@ class Aggregator:
         # for %age based policy callback is not required
         self.straggler_handling_policy.start_policy(callback=self._straggler_cutoff_time_elapsed)
 
+        logger.info(f"get_tasks took {time.time() - start_time:.2f} seconds")
         return tasks, self.round_number, sleep_time, time_to_quit
 
+    @profile
     def _straggler_cutoff_time_elapsed(self) -> None:
+        start_time = time.time()
         """
         This method is called by the straggler handling policy when cutoff timer is elapsed.
         It applies straggler handling policy and ends the round early.
@@ -548,7 +585,9 @@ class Aggregator:
         with self.lock:
             # Check if minimum collaborators reported results
             self._end_of_round_with_stragglers_check()
+        logger.info(f"_straggler_cutoff_time_elapsed took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def get_aggregated_tensor(
         self,
         collaborator_name,
@@ -558,6 +597,7 @@ class Aggregator:
         tags,
         require_lossless,
     ):
+        start_time = time.time()
         """
         RPC called by collaborator.
 
@@ -578,7 +618,7 @@ class Aggregator:
         Raises:
             ValueError: if Aggregator does not have an aggregated tensor for {tensor_key}.
         """
-        logger.debug(
+        logger.info(
             f"Retrieving aggregated tensor {tensor_name},{round_number},{tags} "
             f"for collaborator {collaborator_name}"
         )
@@ -623,10 +663,14 @@ class Aggregator:
         named_tensor = self._nparray_to_named_tensor(
             agg_tensor_key, nparray, send_model_deltas=True, compress_lossless=compress_lossless
         )
-
+        del nparray
+        logger.info(f"get_aggregated_tensor took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::get_aggregated_tensor")
         return named_tensor
 
+    @profile
     def _nparray_to_named_tensor(self, tensor_key, nparray, send_model_deltas, compress_lossless):
+        start_time = time.time()
         """Construct the NamedTensor Protobuf.
 
         Also includes logic to create delta, compress tensors with the
@@ -680,10 +724,12 @@ class Aggregator:
                 metadata,
                 lossless=compress_lossless,
             )
-
+        logger.info(f"_nparray_to_named_tensor took {time.time() - start_time:.2f} seconds")
         return named_tensor
 
+    @profile
     def _collaborator_task_completed(self, collaborator, task_name, round_num):
+        start_time = time.time()
         """Check if the collaborator has completed the task for the round.
 
          The aggregator doesn't actually know which tensors should be sent from
@@ -701,8 +747,10 @@ class Aggregator:
                  this round.
         """
         task_key = TaskResultKey(task_name, collaborator, round_num)
+        logger.info(f"_collaborator_task_completed took {time.time() - start_time:.2f} seconds")
         return task_key in self.collaborator_tasks_results
 
+    @profile
     def send_local_task_results(
         self,
         collaborator_name,
@@ -711,6 +759,7 @@ class Aggregator:
         data_size,
         named_tensors,
     ):
+        start_time = time.time()
         """
         RPC called by collaborator.
 
@@ -810,8 +859,12 @@ class Aggregator:
             self._is_collaborator_done(collaborator_name, round_number)
 
             self._end_of_round_with_stragglers_check()
+        logger.info(f"send_local_task_results took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::send_local_task_results")
 
+    @profile
     def _end_of_round_with_stragglers_check(self):
+        start_time = time.time()
         """
         Checks if the minimum required collaborators have reported their results,
         identifies any stragglers, and initiates an early round end if necessary.
@@ -830,8 +883,11 @@ class Aggregator:
             if len(self.stragglers) != 0:
                 logger.warning(f"Identified stragglers: {self.stragglers}")
             self._end_of_round_check()
+        logger.info(f"_end_of_round_with_stragglers_check took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def _process_named_tensor(self, named_tensor, collaborator_name):
+        start_time = time.time()
         """Extract the named tensor fields.
 
         Performs decompression, delta computation, and inserts results into
@@ -918,10 +974,13 @@ class Aggregator:
         assert final_nparray is not None, f"Could not create tensorkey {final_tensor_key}"
         self.tensor_db.cache_tensor({final_tensor_key: final_nparray})
         logger.debug("Created TensorKey: %s", final_tensor_key)
+        logger.info(f"_process_named_tensor took {time.time() - start_time:.2f} seconds")
 
         return final_tensor_key, final_nparray
 
+    @profile
     def _prepare_trained(self, tensor_name, origin, round_number, report, agg_results):
+        start_time = time.time()
         """Prepare aggregated tensorkey tags.
 
         Args:
@@ -1007,8 +1066,12 @@ class Aggregator:
         self.next_model_round_number = new_model_round_number
         # Finally, cache the updated model tensor
         self.tensor_db.cache_tensor({final_model_tk: new_model_nparray})
+        logger.info(f"_prepare_trained took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def _compute_validation_related_task_metrics(self, task_name) -> dict:
+        start_time = time.time()
+        gc.disable()
         """Compute all validation related metrics.
 
         Args:
@@ -1093,10 +1156,13 @@ class Aggregator:
                         self._save_model(round_number, self.best_state_path)
             if "trained" in tags:
                 self._prepare_trained(tensor_name, origin, round_number, report, agg_results)
-
+        gc.enable()
+        logger.info(f"_compute_validation_related_task_metrics took {time.time() - start_time:.2f} seconds")
         return metrics
 
+    @profile
     def _end_of_round_check(self):
+        start_time = time.time()
         """Check if the round complete.
 
         If so, perform many end of round operations,
@@ -1116,9 +1182,6 @@ class Aggregator:
         logs = {}
         for task_name in self.assigner.get_all_tasks_for_round(self.round_number):
             logs.update(self._compute_validation_related_task_metrics(task_name))
-
-        # End of round callbacks.
-        self.callbacks.on_round_end(self.round_number, logs)
 
         # Once all of the task results have been processed
         self._end_of_round_check_done[self.round_number] = True
@@ -1143,10 +1206,19 @@ class Aggregator:
 
         # Cleaning tensor db
         self.tensor_db.clean_up(self.db_store_rounds)
+        gc.collect()
+
+        # End of round callbacks.
+        self.callbacks.on_round_end(self.round_number, logs)
+
         # Reset straggler handling policy for the next round.
         self.straggler_handling_policy.reset_policy_for_round()
+        logger.info(f"_end_of_round_check took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::_end_of_round_check")
 
+    @profile
     def _is_collaborator_done(self, collaborator_name: str, round_number: int) -> None:
+        start_time = time.time()
         """
         Check if all tasks given to the collaborator are completed then,
         completed or not.
@@ -1183,8 +1255,11 @@ class Aggregator:
                 f"Round {self.round_number}: Collaborators that have completed all tasks: "
                 f"{self.collaborators_done}"
             )
+        logger.info(f"_is_collaborator_done took {time.time() - start_time:.2f} seconds")
 
+    @profile
     def stop(self, failed_collaborator: str = None) -> None:
+        start_time = time.time()
         """Stop aggregator execution.
 
         Args:
@@ -1210,3 +1285,13 @@ class Aggregator:
                 collaborator_name,
             )
             self.quit_job_sent_to.append(collaborator_name)
+        logger.info(f"stop took {time.time() - start_time:.2f} seconds")
+
+    def _log_memory_usage(self, func_name: str = "") -> None:
+        """Log the current memory usage."""
+        current, peak = tracemalloc.get_traced_memory()
+        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        tracemalloc.reset_peak()
+
+        leaked_objects = gc.garbage
+        logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")

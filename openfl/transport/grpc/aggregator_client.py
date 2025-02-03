@@ -7,6 +7,7 @@
 import time
 from logging import getLogger
 from typing import Optional, Tuple
+import tracemalloc
 
 import grpc
 
@@ -15,6 +16,7 @@ from openfl.protocols import aggregator_pb2, aggregator_pb2_grpc, utils
 from openfl.transport.grpc.grpc_channel_options import channel_options
 from openfl.utilities import check_equal
 
+tracemalloc.start()
 
 class ConstantBackoff:
     """Constant Backoff policy.
@@ -372,6 +374,7 @@ class AggregatorGRPCClient:
     @_resend_data_on_reconnection
     @_atomic_connection
     def get_tasks(self, collaborator_name):
+        start_time = time.time()
         """Get tasks from the aggregator.
 
         Args:
@@ -386,6 +389,9 @@ class AggregatorGRPCClient:
         request = aggregator_pb2.GetTasksRequest(header=self.header)
         response = self.stub.GetTasks(request)
         self.validate_response(response, collaborator_name)
+
+        self.logger.info(f"_end_of_round_check took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCClient::get_tasks")
 
         return (
             response.tasks,
@@ -419,6 +425,7 @@ class AggregatorGRPCClient:
         Returns:
             aggregator_pb2.TensorProto: The aggregated tensor.
         """
+        start_time = time.time()
         self._set_header(collaborator_name)
 
         request = aggregator_pb2.GetAggregatedTensorRequest(
@@ -432,6 +439,9 @@ class AggregatorGRPCClient:
         response = self.stub.GetAggregatedTensor(request)
         # also do other validation, like on the round_number
         self.validate_response(response, collaborator_name)
+
+        self.logger.info(f"_end_of_round_check took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCClient::get_aggregated_tensor")
 
         return response.tensor
 
@@ -456,6 +466,7 @@ class AggregatorGRPCClient:
             named_tensors (List[aggregator_pb2.NamedTensorProto]): The list of
                 named tensors.
         """
+        start_time = time.time()
         self._set_header(collaborator_name)
         request = aggregator_pb2.TaskResults(
             header=self.header,
@@ -472,6 +483,9 @@ class AggregatorGRPCClient:
 
         # also do other validation, like on the round_number
         self.validate_response(response, collaborator_name)
+
+        self.logger.info(f"_end_of_round_check took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCClient::send_local_task_results")
 
     def _get_trained_model(self, experiment_name, model_type):
         """Get trained model RPC.
@@ -492,4 +506,13 @@ class AggregatorGRPCClient:
             model_proto_response.model_proto,
             NoCompressionPipeline(),
         )
+
+        self.logger.info(f"_end_of_round_check took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCClient::get_train_model")
         return tensor_dict
+    
+    def _log_memory_usage(self, func_name: str = "") -> None:
+        """Log the current memory usage."""
+        current, peak = tracemalloc.get_traced_memory()
+        self.logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        tracemalloc.reset_peak()

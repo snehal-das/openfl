@@ -5,8 +5,10 @@
 """Collaborator module."""
 
 import logging
+import gc
 from enum import Enum
 from time import sleep
+from memory_profiler import profile
 from typing import List, Optional, Tuple
 
 import openfl.callbacks as callbacks_module
@@ -70,6 +72,7 @@ class Collaborator:
         \* - Plan setting.
     """
 
+    @profile
     def __init__(
         self,
         collaborator_name,
@@ -156,6 +159,7 @@ class Collaborator:
             origin=self.collaborator_name,
         )
 
+    @profile
     def set_available_devices(self, cuda: Tuple[str] = ()):
         """Set available CUDA devices.
 
@@ -165,6 +169,7 @@ class Collaborator:
         """
         self.cuda_devices = cuda
 
+    @profile
     def run(self):
         """Run the collaborator."""
         # Experiment begin
@@ -189,6 +194,8 @@ class Collaborator:
             for task in tasks:
                 metrics = self.do_task(task, round_num)
                 logs.update(metrics)
+                metrics = None
+                del metrics
 
             # Round end
             self.tensor_db.clean_up(self.db_store_rounds)
@@ -198,6 +205,7 @@ class Collaborator:
         self.callbacks.on_experiment_end()
         logger.info("Received shutdown signal. Exiting...")
 
+    @profile
     def run_simulation(self):
         """Specific function for the simulation.
 
@@ -220,6 +228,7 @@ class Collaborator:
                 )
                 break
 
+    @profile
     def get_tasks(self):
         """Get tasks from the aggregator.
 
@@ -237,6 +246,7 @@ class Collaborator:
 
         return tasks, round_number, sleep_time, time_to_quit
 
+    @profile
     def do_task(self, task, round_number) -> dict:
         """Perform the specified task.
 
@@ -337,6 +347,7 @@ class Collaborator:
         metrics = self.send_task_results(global_output_tensor_dict, round_number, task_name)
         return metrics
 
+    @profile
     def get_numpy_dict_for_tensorkeys(self, tensor_keys):
         """Get tensor dictionary for specified tensorkey set.
 
@@ -346,6 +357,7 @@ class Collaborator:
         """
         return {k.tensor_name: self.get_data_for_tensorkey(k) for k in tensor_keys}
 
+    @profile
     def get_data_for_tensorkey(self, tensor_key):
         """Resolve the tensor corresponding to the requested tensorkey.
 
@@ -439,6 +451,7 @@ class Collaborator:
 
         return nparray
 
+    @profile
     def get_aggregated_tensor_from_aggregator(self, tensor_key, require_lossless=False):
         """
         Return the decompressed tensor associated with the requested tensor key.
@@ -459,9 +472,15 @@ class Collaborator:
             nparray : The decompressed tensor associated with the requested
                 tensor key.
         """
+
+        nparray = self.tensor_db.get_tensor_from_cache(tensor_key)
+
+        if nparray is not None:
+            return nparray
+
         tensor_name, origin, round_number, report, tags = tensor_key
 
-        logger.debug("Requesting aggregated tensor %s", tensor_key)
+        logger.info("Requesting aggregated tensor from aggregator: %s", tensor_key)
         tensor = self.client.get_aggregated_tensor(
             self.collaborator_name,
             tensor_name,
@@ -480,6 +499,7 @@ class Collaborator:
 
         return nparray
 
+    @profile
     def send_task_results(self, tensor_dict, round_number, task_name) -> dict:
         """Send task results to the aggregator.
 
@@ -504,8 +524,6 @@ class Collaborator:
         if "valid" in task_name:
             data_size = self.task_runner.get_valid_data_size()
 
-        logger.debug("%s data size = %s", task_name, data_size)
-
         metrics = {}
         for tensor in tensor_dict:
             tensor_name, origin, fl_round, report, tags = tensor
@@ -525,6 +543,7 @@ class Collaborator:
 
         return metrics
 
+    @profile
     def nparray_to_named_tensor(self, tensor_key, nparray):
         """Construct the NamedTensor Protobuf.
 
@@ -578,6 +597,7 @@ class Collaborator:
 
         return named_tensor
 
+    @profile
     def named_tensor_to_nparray(self, named_tensor):
         """Convert named tensor to a numpy array.
 

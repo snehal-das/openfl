@@ -5,8 +5,19 @@
 
 from openfl.protocols import base_pb2
 from openfl.utilities import TensorKey
+from memory_profiler import profile
+import time
+import tracemalloc
 
+tracemalloc.start()
 
+def log_memory_usage(func_name: str = "") -> None:
+    """Log the current memory usage."""
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+    tracemalloc.reset_peak()
+
+@profile
 def model_proto_to_bytes_and_metadata(model_proto):
     """Convert the model protobuf to bytes and metadata.
 
@@ -20,6 +31,7 @@ def model_proto_to_bytes_and_metadata(model_proto):
             values are the corresponding tensor metadata.
         round_number: The round number for the model.
     """
+    start_time = time.time()
     bytes_dict = {}
     metadata_dict = {}
     round_number = None
@@ -40,9 +52,11 @@ def model_proto_to_bytes_and_metadata(model_proto):
                 f"Round numbers in model are inconsistent: {round_number} "
                 f"and {tensor_proto.round_number}"
             )
+    log_memory_usage("model_proto_to_bytes_and_metadata")
     return bytes_dict, metadata_dict, round_number
 
 
+@profile
 def bytes_and_metadata_to_model_proto(bytes_dict, model_id, model_version, is_delta, metadata_dict):
     """
     Convert bytes and metadata to model protobuf.
@@ -94,9 +108,11 @@ def bytes_and_metadata_to_model_proto(bytes_dict, model_id, model_version, is_de
                 transformer_metadata=metadata_protos,
             )
         )
+    log_memory_usage("bytes_and_metadata_to_model_proto")
     return base_pb2.ModelProto(header=model_header, tensors=tensor_protos)
 
 
+@profile
 def construct_named_tensor(tensor_key, nparray, transformer_metadata, lossless):
     """Construct named tensor.
 
@@ -135,6 +151,7 @@ def construct_named_tensor(tensor_key, nparray, transformer_metadata, lossless):
 
     tensor_name, origin, round_number, report, tags = tensor_key
 
+    log_memory_usage("construct_named_tensor")
     return base_pb2.NamedTensor(
         name=tensor_name,
         round_number=round_number,
@@ -146,6 +163,7 @@ def construct_named_tensor(tensor_key, nparray, transformer_metadata, lossless):
     )
 
 
+@profile
 def construct_proto(tensor_dict, model_id, model_version, is_delta, compression_pipeline):
     """Construct proto.
 
@@ -175,9 +193,11 @@ def construct_proto(tensor_dict, model_id, model_version, is_delta, compression_
         is_delta=is_delta,
         metadata_dict=metadata_dict,
     )
+    log_memory_usage("construct_proto")
     return model_proto
 
 
+@profile
 def construct_model_proto(tensor_dict, round_number, tensor_pipe):
     """Construct model proto from tensor dict.
 
@@ -205,9 +225,11 @@ def construct_model_proto(tensor_dict, round_number, tensor_pipe):
             )
         )
 
+    log_memory_usage("construct_model_proto")
     return base_pb2.ModelProto(tensors=named_tensors)
 
 
+@profile
 def deconstruct_model_proto(model_proto, compression_pipeline):
     """Deconstruct model proto.
 
@@ -235,9 +257,14 @@ def deconstruct_model_proto(model_proto, compression_pipeline):
         tensor_dict[key] = compression_pipeline.backward(
             data=bytes_dict[key], transformer_metadata=metadata_dict[key]
         )
+    del bytes_dict
+    del metadata_dict
+
+    log_memory_usage("deconstruct_model_proto")
     return tensor_dict, round_number
 
 
+@profile
 def deconstruct_proto(model_proto, compression_pipeline):
     """Deconstruct the protobuf.
 
@@ -263,9 +290,11 @@ def deconstruct_proto(model_proto, compression_pipeline):
         tensor_dict[key] = compression_pipeline.backward(
             data=bytes_dict[key], transformer_metadata=metadata_dict[key]
         )
+    log_memory_usage("deconstruct_proto")
     return tensor_dict
 
 
+@profile
 def load_proto(fpath):
     """Load the protobuf.
 
@@ -278,9 +307,11 @@ def load_proto(fpath):
     with open(fpath, "rb") as f:
         loaded = f.read()
         model = base_pb2.ModelProto().FromString(loaded)
+        log_memory_usage("load_proto")
         return model
 
 
+@profile
 def dump_proto(model_proto, fpath):
     """Dump the protobuf to a file.
 
@@ -288,11 +319,12 @@ def dump_proto(model_proto, fpath):
         model_proto: The protobuf of the model.
         fpath: The file path to dump the protobuf.
     """
-    s = model_proto.SerializeToString()
     with open(fpath, "wb") as f:
-        f.write(s)
+        f.write(model_proto.SerializeToString())
+    log_memory_usage("dump_proto")
 
 
+@profile
 def datastream_to_proto(proto, stream, logger=None):
     """Convert the datastream to the protobuf.
 
@@ -312,11 +344,13 @@ def datastream_to_proto(proto, stream, logger=None):
         proto.ParseFromString(npbytes)
         if logger is not None:
             logger.debug("datastream_to_proto parsed a %s.", type(proto))
+        log_memory_usage("datastream_to_proto")
         return proto
     else:
         raise RuntimeError(f"Received empty stream message of type {type(proto)}")
 
 
+@profile
 def proto_to_datastream(proto, logger, max_buffer_size=(2 * 1024 * 1024)):
     """Convert the protobuf to the datastream for the remote connection.
 
@@ -342,8 +376,10 @@ def proto_to_datastream(proto, logger, max_buffer_size=(2 * 1024 * 1024)):
         chunk = npbytes[i : i + buffer_size]
         reply = base_pb2.DataStream(npbytes=chunk, size=len(chunk))
         yield reply
+    log_memory_usage("proto_to_datastream")
 
 
+@profile
 def get_headers(context) -> dict:
     """Get headers from context.
 
@@ -354,4 +390,5 @@ def get_headers(context) -> dict:
         headers: A dictionary where the keys are header names and the
             values are the corresponding header values.
     """
+    log_memory_usage("get_headers")
     return {header[0]: header[1] for header in context.invocation_metadata()}

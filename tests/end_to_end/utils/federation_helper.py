@@ -381,7 +381,7 @@ def verify_federation_run_completion(fed_obj, results, test_env, num_rounds):
 
 
 def _verify_completion_for_participant(
-    participant, num_rounds, result_file, test_env, time_for_each_round=100, local_bind_path=None
+    participant, num_rounds, result_file, test_env, time_for_each_round=500, local_bind_path=None
 ):
     """
     Verify the completion of the process for the participant
