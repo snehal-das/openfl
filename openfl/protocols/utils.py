@@ -13,9 +13,10 @@ tracemalloc.start()
 
 def log_memory_usage(func_name: str = "") -> None:
     """Log the current memory usage."""
-    current, peak = tracemalloc.get_traced_memory()
-    print(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
-    tracemalloc.reset_peak()
+    # current, peak = tracemalloc.get_traced_memory()
+    # print(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+    # tracemalloc.reset_peak()
+    return
 
 @profile
 def model_proto_to_bytes_and_metadata(model_proto):
@@ -345,8 +346,10 @@ def datastream_to_proto(proto, stream, logger=None):
         if logger is not None:
             logger.debug("datastream_to_proto parsed a %s.", type(proto))
         log_memory_usage("datastream_to_proto")
+        del npbytes
         return proto
     else:
+        del npbytes
         raise RuntimeError(f"Received empty stream message of type {type(proto)}")
 
 

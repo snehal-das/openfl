@@ -155,7 +155,7 @@ class TensorDB:
             del old_tensor_db
             entries_to_add.clear()
             gc.collect()
-        logger.info(f"TensorDB::clean_up took {time.time() - start_time:.2f} seconds")
+        logger.info(f"TensorDB::cache_tensor took {time.time() - start_time:.2f} seconds")
         self._log_memory_usage("TensorDB::cache_tensor")
 
     @profile
@@ -187,7 +187,7 @@ class TensorDB:
         logger.info(f"TensorDB::get_tensor_for_cache() took {time.time() - start_time:.2f} seconds")
         self._log_memory_usage("TensorDB::get_tensor_from_cache")
 
-         return np.array(df["nparray"].iloc[0])
+        return np.array(df["nparray"].iloc[0])
 
     @profile
     def get_tensors_by_round_and_tags(self, fl_round: int, tags: tuple) -> dict:
@@ -343,8 +343,10 @@ class TensorDB:
 
     def _log_memory_usage(self, func_name: str = "") -> None:
         """Log the current memory usage."""
-        current, peak = tracemalloc.get_traced_memory()
-        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
-        tracemalloc.reset_peak()
-        leaked_objects = gc.garbage
-        logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")
+        # current, peak = tracemalloc.get_traced_memory()
+        # logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        # tracemalloc.reset_peak()
+        # leaked_objects = gc.garbage
+        # logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")
+        logger.info(f"{func_name}: Returning early to reduce processing time")
+        return

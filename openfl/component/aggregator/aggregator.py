@@ -445,7 +445,6 @@ class Aggregator:
             )
         logger.info(f"valid_collaborator_cn_and_id took {time.time() - start_time:.2f} seconds")
 
-    @profile
     def all_quit_jobs_sent(self):
         start_time = time.time()
         """Assert all quit jobs are sent to collaborators.
@@ -456,7 +455,6 @@ class Aggregator:
         return set(self.quit_job_sent_to) == set(self.authorized_cols)
         logger.info(f"all_quit_jobs_sent took {time.time() - start_time:.2f} seconds")
 
-    @profile
     @staticmethod
     def _get_sleep_time():
         start_time = time.time()
@@ -469,7 +467,6 @@ class Aggregator:
         return 10
         logger.info(f"_get_sleep_time took {time.time() - start_time:.2f} seconds")
 
-    @profile
     def _time_to_quit(self):
         start_time = time.time()
         """If all rounds are complete, it's time to quit.
@@ -800,6 +797,7 @@ class Aggregator:
         data_size,
         named_tensors,
     ):
+        start_time = time.time()
         if self._time_to_quit() or collaborator_name in self.stragglers:
             logger.warning(
                 f"STRAGGLER: Collaborator {collaborator_name} is reporting results "
@@ -859,8 +857,9 @@ class Aggregator:
             self._is_collaborator_done(collaborator_name, round_number)
 
             self._end_of_round_with_stragglers_check()
-        logger.info(f"send_local_task_results took {time.time() - start_time:.2f} seconds")
-        self._log_memory_usage("Aggregator::send_local_task_results")
+
+        logger.info(f"process_task_results took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("Aggregator::process_task_results")
 
     @profile
     def _end_of_round_with_stragglers_check(self):
@@ -1071,7 +1070,6 @@ class Aggregator:
     @profile
     def _compute_validation_related_task_metrics(self, task_name) -> dict:
         start_time = time.time()
-        gc.disable()
         """Compute all validation related metrics.
 
         Args:
@@ -1156,7 +1154,6 @@ class Aggregator:
                         self._save_model(round_number, self.best_state_path)
             if "trained" in tags:
                 self._prepare_trained(tensor_name, origin, round_number, report, agg_results)
-        gc.enable()
         logger.info(f"_compute_validation_related_task_metrics took {time.time() - start_time:.2f} seconds")
         return metrics
 
@@ -1205,7 +1202,19 @@ class Aggregator:
             self.callbacks.on_round_begin(self.round_number)
 
         # Cleaning tensor db
+        memory_used = asizeof.asizeof(self.tensor_db)
+        logger.info(
+            "Size of tensor_db in memory before clean_up round %s: %s",
+            self.round_number, memory_used,
+        )
         self.tensor_db.clean_up(self.db_store_rounds)
+        memory_used = asizeof.asizeof(self.tensor_db)
+        logger.info(
+            "Size of tensor_db in memory after clean_up round %s: %s",
+            self.round_number, memory_used,
+        )
+        # if 'logs' in locals():
+        #     del logs
         gc.collect()
 
         # End of round callbacks.
@@ -1289,9 +1298,11 @@ class Aggregator:
 
     def _log_memory_usage(self, func_name: str = "") -> None:
         """Log the current memory usage."""
-        current, peak = tracemalloc.get_traced_memory()
-        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
-        tracemalloc.reset_peak()
-
-        leaked_objects = gc.garbage
-        logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")
+        # current, peak = tracemalloc.get_traced_memory()
+        # logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        # tracemalloc.reset_peak()
+        #
+        # leaked_objects = gc.garbage
+        # logger.info(f"{func_name}: Uncollectable objects : {leaked_objects}")
+        logger.info(f"{func_name}: Returning early to reduce processing time")
+        return

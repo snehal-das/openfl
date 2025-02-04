@@ -276,14 +276,14 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
             tags,
             require_lossless,
         )
+        logger.info(f"GetAggregatedTensor took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::GetAggregatedTensor")
 
         return aggregator_pb2.GetAggregatedTensorResponse(
             header=self.get_header(collaborator_name),
             round_number=round_number,
             tensor=named_tensor,
         )
-        logger.info(f"GetAggregatedTensor took {time.time() - start_time:.2f} seconds")
-        self._log_memory_usage("AggregatorGRPCServer::GetAggregatedTensor")
 
     @profile
     def SendLocalTaskResults(self, request, context):  # NOQA:N802
@@ -322,12 +322,12 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
         self.aggregator.send_local_task_results(
             collaborator_name, round_number, task_name, data_size, named_tensors
         )
+        logger.info(f"SendLocalTaskResults took {time.time() - start_time:.2f} seconds")
+        self._log_memory_usage("AggregatorGRPCServer::SendLocalTaskResults")
         # turn data stream into local model update
         return aggregator_pb2.SendLocalTaskResultsResponse(
             header=self.get_header(collaborator_name)
         )
-        logger.info(f"SendLocalTaskResults took {time.time() - start_time:.2f} seconds")
-        self._log_memory_usage("AggregatorGRPCServer::SendLocalTaskResults")
 
     @profile
     def get_server(self):
@@ -402,9 +402,11 @@ class AggregatorGRPCServer(aggregator_pb2_grpc.AggregatorServicer):
 
     def _log_memory_usage(self, func_name: str = "") -> None:
         """Log the current memory usage."""
-        current, peak = tracemalloc.get_traced_memory()
-        logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
-        tracemalloc.reset_peak()
+        # current, peak = tracemalloc.get_traced_memory()
+        # logger.info(f"{func_name}: Current memory usage: {current / 10**6:.2f} MB; Peak: {peak / 10**6:.2f} MB")
+        # tracemalloc.reset_peak()
 
-        leaked_objects = gc.garbage
-        logger.info("{func_name}: Uncollected objects : {leaked_objects}")
+        # leaked_objects = gc.garbage
+        # logger.info("{func_name}: Uncollected objects : {leaked_objects}")
+        logger.info(f"{func_name}: Returning early to reduce processing time")
+        return

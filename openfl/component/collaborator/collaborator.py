@@ -330,14 +330,14 @@ class Collaborator:
             # Tasks are defined as methods of TaskRunner
             func = getattr(self.task_runner, func_name)
             logger.debug("Using TaskRunner subclassing API")
-
+        gc.disable()
         global_output_tensor_dict, local_output_tensor_dict = func(
             col_name=self.collaborator_name,
             round_num=round_number,
             input_tensor_dict=input_tensor_dict,
             **kwargs,
         )
-
+        gc.enable()
         # Save global and local output_tensor_dicts to TensorDB
         self.tensor_db.cache_tensor(global_output_tensor_dict)
         self.tensor_db.cache_tensor(local_output_tensor_dict)
@@ -472,12 +472,6 @@ class Collaborator:
             nparray : The decompressed tensor associated with the requested
                 tensor key.
         """
-
-        nparray = self.tensor_db.get_tensor_from_cache(tensor_key)
-
-        if nparray is not None:
-            return nparray
-
         tensor_name, origin, round_number, report, tags = tensor_key
 
         logger.info("Requesting aggregated tensor from aggregator: %s", tensor_key)
